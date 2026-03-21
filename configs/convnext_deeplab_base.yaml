@@ -1,0 +1,7 @@
+inherit: base.yaml
+experiment_name: convnext_deeplab_base
+model:
+  encoder_name: convnext_tiny
+  decoder_name: deeplabv3p
+  use_attention: false
+  deep_supervision: false

@@ -1,0 +1,7 @@
+inherit: base.yaml
+experiment_name: swin_unetpp_attn
+model:
+  encoder_name: swin_tiny_patch4_window7_224
+  decoder_name: unetpp
+  use_attention: true
+  deep_supervision: true

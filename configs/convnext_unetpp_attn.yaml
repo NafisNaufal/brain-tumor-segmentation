@@ -1,0 +1,7 @@
+inherit: base.yaml
+experiment_name: convnext_unetpp_attn
+model:
+  encoder_name: convnext_tiny
+  decoder_name: unetpp
+  use_attention: true
+  deep_supervision: true

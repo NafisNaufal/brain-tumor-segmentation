@@ -1,0 +1,7 @@
+inherit: base.yaml
+experiment_name: swin_deeplab_base
+model:
+  encoder_name: swin_tiny_patch4_window7_224
+  decoder_name: deeplabv3p
+  use_attention: false
+  deep_supervision: false
