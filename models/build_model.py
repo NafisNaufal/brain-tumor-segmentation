@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -30,8 +30,7 @@ class SegmentationModel(nn.Module):
             pretrained=pretrained,
         )
 
-        self.use_attention = use_attention
-        if self.use_attention:
+        if use_attention:
             self.attention = nn.ModuleList(
                 [TriAxisAttention(channels=c) for c in self.encoder.out_channels]
             )
@@ -52,7 +51,7 @@ class SegmentationModel(nn.Module):
         else:
             raise ValueError(f"Unsupported decoder: {decoder_name}")
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor | List[torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> torch.Tensor | list[torch.Tensor]:
         input_size = x.shape[2:]
         feats = self.encoder(x)
 
@@ -74,7 +73,7 @@ class SegmentationModel(nn.Module):
                 yield param
 
 
-def build_model(cfg: Dict) -> SegmentationModel:
+def build_model(cfg: dict[str, Any]) -> SegmentationModel:
     model_cfg = cfg["model"]
     return SegmentationModel(
         encoder_name=model_cfg["encoder_name"],

@@ -1,18 +1,22 @@
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+"""Preprocessing and augmentation transforms for BraTS segmentation."""
+
+from typing import Any, Sequence
 
 import numpy as np
 from monai.transforms import (
     Compose,
     MapTransform,
     RandFlipd,
-    Randomizable,
+    RandGaussianNoised,
     RandomizableTransform,
 )
 
 
 class NonZeroPercentileClipd(MapTransform):
+    """Clip image intensities using non-zero voxel percentiles per channel."""
+
     def __init__(
         self,
         keys: Sequence[str],
@@ -23,7 +27,7 @@ class NonZeroPercentileClipd(MapTransform):
         self.lower = lower
         self.upper = upper
 
-    def __call__(self, data: dict) -> dict:
+    def __call__(self, data: dict[str, Any]) -> dict[str, Any]:
         d = dict(data)
         for key in self.keys:
             image = d[key].astype(np.float32, copy=False)
@@ -41,11 +45,13 @@ class NonZeroPercentileClipd(MapTransform):
 
 
 class MinMaxNormalizeNonZerod(MapTransform):
+    """Apply per-channel min-max normalization over non-zero voxels."""
+
     def __init__(self, keys: Sequence[str], eps: float = 1e-8) -> None:
         super().__init__(keys)
         self.eps = eps
 
-    def __call__(self, data: dict) -> dict:
+    def __call__(self, data: dict[str, Any]) -> dict[str, Any]:
         d = dict(data)
         for key in self.keys:
             image = d[key].astype(np.float32, copy=False)
@@ -66,11 +72,13 @@ class MinMaxNormalizeNonZerod(MapTransform):
 
 
 class CropToBrainBBoxd(MapTransform):
+    """Crop image and label to the smallest brain bounding box."""
+
     def __init__(self, keys: Sequence[str], source_key: str = "image") -> None:
         super().__init__(keys)
         self.source_key = source_key
 
-    def __call__(self, data: dict) -> dict:
+    def __call__(self, data: dict[str, Any]) -> dict[str, Any]:
         d = dict(data)
         source = d[self.source_key]
         mask = np.any(source != 0, axis=0)
@@ -93,6 +101,8 @@ class CropToBrainBBoxd(MapTransform):
 
 
 class RandIntensityScaled(RandomizableTransform):
+    """Apply random multiplicative intensity scaling."""
+
     def __init__(
         self,
         keys: Sequence[str],
@@ -104,11 +114,11 @@ class RandIntensityScaled(RandomizableTransform):
         self.factor_range = factor_range
         self._factor = 1.0
 
-    def randomize(self, data: dict | None = None) -> None:
+    def randomize(self, data: dict[str, Any] | None = None) -> None:
         super().randomize(None)
         self._factor = self.R.uniform(self.factor_range[0], self.factor_range[1])
 
-    def __call__(self, data: dict) -> dict:
+    def __call__(self, data: dict[str, Any]) -> dict[str, Any]:
         d = dict(data)
         self.randomize(d)
         if not self._do_transform:
@@ -119,47 +129,22 @@ class RandIntensityScaled(RandomizableTransform):
         return d
 
 
-class StdChannelGaussianNoised(MapTransform):
-    def __init__(self, keys: Sequence[str], scale: float = 0.1, prob: float = 0.5) -> None:
-        super().__init__(keys)
-        self.scale = scale
-        self.prob = prob
-        self._rng = np.random.default_rng()
-
-    def __call__(self, data: dict) -> dict:
-        d = dict(data)
-        if self._rng.random() > self.prob:
-            return d
-
-        for key in self.keys:
-            image = d[key].astype(np.float32, copy=False)
-            out = image.copy()
-            for channel in range(image.shape[0]):
-                vox = image[channel]
-                nz = vox[vox != 0]
-                if nz.size < 10:
-                    continue
-                std_c = float(nz.std())
-                noise = self._rng.normal(loc=0.0, scale=std_c * self.scale, size=vox.shape).astype(np.float32)
-                out[channel] = vox + noise
-            d[key] = out
-        return d
-
-
 class RandChannelDropoutd(RandomizableTransform):
-    def __init__(self, keys: Sequence[str], prob: float = 0.18) -> None:
+    """Randomly zero one input modality channel."""
+
+    def __init__(self, keys: Sequence[str], prob: float = 0.16) -> None:
         super().__init__(prob=prob)
         self.keys = keys
         self._drop_channel: int = -1
 
-    def randomize(self, data: dict | None = None) -> None:
+    def randomize(self, data: dict[str, Any] | None = None) -> None:
         super().randomize(None)
         if not self._do_transform or data is None:
             return
         n_channels = int(data[self.keys[0]].shape[0])
         self._drop_channel = int(self.R.randint(0, n_channels))
 
-    def __call__(self, data: dict) -> dict:
+    def __call__(self, data: dict[str, Any]) -> dict[str, Any]:
         d = dict(data)
         self.randomize(d)
         if not self._do_transform:
@@ -172,43 +157,8 @@ class RandChannelDropoutd(RandomizableTransform):
         return d
 
 
-class RandAxisPermutationd(RandomizableTransform):
-    """Random axis permutation over spatial dims, applied to image and label consistently."""
-
-    def __init__(self, keys: Sequence[str], prob: float = 0.5) -> None:
-        super().__init__(prob=prob)
-        self.keys = keys
-        self._perm = (0, 1, 2)
-
-    def randomize(self, data: dict | None = None) -> None:
-        super().randomize(None)
-        if not self._do_transform:
-            self._perm = (0, 1, 2)
-            return
-        all_perms = [
-            (0, 1, 2),
-            (0, 2, 1),
-            (1, 0, 2),
-            (1, 2, 0),
-            (2, 0, 1),
-            (2, 1, 0),
-        ]
-        self._perm = all_perms[int(self.R.randint(0, len(all_perms)))]
-
-    def __call__(self, data: dict) -> dict:
-        d = dict(data)
-        self.randomize(d)
-        if not self._do_transform or self._perm == (0, 1, 2):
-            return d
-
-        for key in self.keys:
-            arr = d[key]
-            d[key] = np.transpose(arr, axes=(0, *(axis + 1 for axis in self._perm))).copy()
-        return d
-
-
 def _safe_crop_to_patch(arr: np.ndarray, patch_size: Sequence[int], center: bool = False) -> np.ndarray:
-    c, h, w, z = arr.shape
+    _, h, w, z = arr.shape
     ph, pw, pz = patch_size
 
     out = arr
@@ -216,7 +166,12 @@ def _safe_crop_to_patch(arr: np.ndarray, patch_size: Sequence[int], center: bool
         pad_h = max(0, ph - h)
         pad_w = max(0, pw - w)
         pad_z = max(0, pz - z)
-        pad = ((0, 0), (pad_h // 2, pad_h - pad_h // 2), (pad_w // 2, pad_w - pad_w // 2), (pad_z // 2, pad_z - pad_z // 2))
+        pad = (
+            (0, 0),
+            (pad_h // 2, pad_h - pad_h // 2),
+            (pad_w // 2, pad_w - pad_w // 2),
+            (pad_z // 2, pad_z - pad_z // 2),
+        )
         out = np.pad(out, pad, mode="constant", constant_values=0)
 
     _, hh, ww, zz = out.shape
@@ -234,14 +189,16 @@ def _safe_crop_to_patch(arr: np.ndarray, patch_size: Sequence[int], center: bool
 
 
 class RandomCropPatchd(MapTransform):
+    """Randomly crop fixed-size 3D patches from image and label."""
+
     def __init__(self, keys: Sequence[str], patch_size: Sequence[int]) -> None:
         super().__init__(keys)
         self.patch_size = patch_size
 
-    def __call__(self, data: dict) -> dict:
+    def __call__(self, data: dict[str, Any]) -> dict[str, Any]:
         d = dict(data)
         image = d[self.keys[0]]
-        c, h, w, z = image.shape
+        h, w, z = image.shape[1:]
         ph, pw, pz = self.patch_size
 
         if h < ph or w < pw or z < pz:
@@ -261,18 +218,20 @@ class RandomCropPatchd(MapTransform):
 
 
 class CenterCropPatchd(MapTransform):
+    """Center crop fixed-size 3D patches from image and label."""
+
     def __init__(self, keys: Sequence[str], patch_size: Sequence[int]) -> None:
         super().__init__(keys)
         self.patch_size = patch_size
 
-    def __call__(self, data: dict) -> dict:
+    def __call__(self, data: dict[str, Any]) -> dict[str, Any]:
         d = dict(data)
         for key in self.keys:
             d[key] = _safe_crop_to_patch(d[key], self.patch_size, center=True)
         return d
 
 
-def build_train_transforms(cfg: dict) -> Compose:
+def build_train_transforms(cfg: dict[str, Any]) -> Compose:
     patch_size = cfg["data"]["patch_size"]
     aug_cfg = cfg["augment"]
 
@@ -283,17 +242,16 @@ def build_train_transforms(cfg: dict) -> Compose:
             CropToBrainBBoxd(keys=["image", "label"], source_key="image"),
             RandomCropPatchd(keys=["image", "label"], patch_size=patch_size),
             RandIntensityScaled(keys=["image"], factor_range=(0.9, 1.1), prob=aug_cfg["intensity_prob"]),
-            StdChannelGaussianNoised(keys=["image"], scale=0.1, prob=aug_cfg["gaussian_noise_prob"]),
+            RandGaussianNoised(keys=["image"], prob=aug_cfg["gaussian_noise_prob"], mean=0.0, std=0.1),
             RandChannelDropoutd(keys=["image"], prob=aug_cfg["channel_dropout_prob"]),
             RandFlipd(keys=["image", "label"], prob=aug_cfg["flip_prob"], spatial_axis=0),
             RandFlipd(keys=["image", "label"], prob=aug_cfg["flip_prob"], spatial_axis=1),
             RandFlipd(keys=["image", "label"], prob=aug_cfg["flip_prob"], spatial_axis=2),
-            RandAxisPermutationd(keys=["image", "label"], prob=aug_cfg["axis_permutation_prob"]),
         ]
     )
 
 
-def build_val_transforms(cfg: dict) -> Compose:
+def build_val_transforms(cfg: dict[str, Any]) -> Compose:
     patch_size = cfg["data"]["patch_size"]
     return Compose(
         [

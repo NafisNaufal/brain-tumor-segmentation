@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Dict
-
 import numpy as np
 import torch
 from torch.cuda.amp import autocast
@@ -17,7 +15,7 @@ def validate(
     device: torch.device,
     amp_enabled: bool = True,
     compute_hd95: bool = False,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     model.eval()
 
     val_loss = 0.0

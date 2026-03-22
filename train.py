@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+"""Training entrypoint for BraTS-style 3D segmentation experiments."""
+
 import argparse
 import os
 import random
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 import torch
@@ -23,19 +25,30 @@ from utils.scheduler import build_warmup_cosine_scheduler
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="BraTS 3D Segmentation Training")
     parser.add_argument("--config", type=str, required=True, help="Path to yaml config")
     return parser.parse_args()
 
 
 def set_seed(seed: int) -> None:
+    """Seed Python, NumPy, and PyTorch RNGs for reproducibility."""
+    os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
 
-def deep_update(base: Dict[str, Any], update: Dict[str, Any]) -> Dict[str, Any]:
+def seed_worker(_worker_id: int) -> None:
+    """Set deterministic seeds for each DataLoader worker process."""
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
+
+
+def deep_update(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge update mapping into base mapping."""
     out = dict(base)
     for key, value in update.items():
         if isinstance(value, dict) and isinstance(out.get(key), dict):
@@ -45,7 +58,8 @@ def deep_update(base: Dict[str, Any], update: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def load_config(config_path: str) -> Dict[str, Any]:
+def load_config(config_path: str) -> dict[str, Any]:
+    """Load YAML config with optional parent inheritance."""
     cfg_path = Path(config_path)
     with cfg_path.open("r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
@@ -59,7 +73,8 @@ def load_config(config_path: str) -> Dict[str, Any]:
     return cfg
 
 
-def create_optimizer(cfg: Dict[str, Any], model: torch.nn.Module) -> torch.optim.Optimizer:
+def create_optimizer(cfg: dict[str, Any], model: torch.nn.Module) -> torch.optim.Optimizer:
+    """Build AdamW optimizer with separate encoder/decoder learning rates."""
     enc_lr = cfg["optim"]["encoder_lr"]
     dec_lr = cfg["optim"]["decoder_lr"]
     weight_decay = cfg["optim"]["weight_decay"]
@@ -75,13 +90,34 @@ def create_optimizer(cfg: Dict[str, Any], model: torch.nn.Module) -> torch.optim
 
 
 def main() -> None:
+    """Run training and validation loop and save best checkpoints."""
     args = parse_args()
     cfg = load_config(args.config)
 
-    set_seed(cfg["seed"])
+    seed = int(cfg["seed"])
+    set_seed(seed)
+
+    reproducibility_cfg = cfg.get("reproducibility", {})
+    deterministic = bool(reproducibility_cfg.get("deterministic", False))
+    use_deterministic_algorithms = bool(
+        reproducibility_cfg.get("use_deterministic_algorithms", False)
+    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    torch.backends.cudnn.benchmark = True
+
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.use_deterministic_algorithms(use_deterministic_algorithms, warn_only=True)
+    else:
+        torch.backends.cudnn.benchmark = True
+
+    data_loader_generator = torch.Generator()
+    data_loader_generator.manual_seed(seed)
+
+    num_workers = int(cfg["data"]["num_workers"])
+    persistent_workers = bool(cfg["data"].get("persistent_workers", num_workers > 0))
+    prefetch_factor = int(cfg["data"].get("prefetch_factor", 2))
 
     train_ds = BraTSDataset(
         manifest_path=cfg["data"]["train_manifest"],
@@ -92,21 +128,35 @@ def main() -> None:
         transform=build_val_transforms(cfg),
     )
 
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=cfg["training"]["batch_size"],
-        shuffle=True,
-        num_workers=cfg["data"]["num_workers"],
-        pin_memory=True,
-        drop_last=True,
-    )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=cfg["training"]["batch_size"],
-        shuffle=False,
-        num_workers=cfg["data"]["num_workers"],
-        pin_memory=True,
-    )
+    train_loader_kwargs: dict[str, Any] = {
+        "dataset": train_ds,
+        "batch_size": cfg["training"]["batch_size"],
+        "shuffle": True,
+        "num_workers": num_workers,
+        "pin_memory": True,
+        "drop_last": True,
+        "worker_init_fn": seed_worker,
+        "generator": data_loader_generator,
+    }
+    if num_workers > 0:
+        train_loader_kwargs["persistent_workers"] = persistent_workers
+        train_loader_kwargs["prefetch_factor"] = prefetch_factor
+
+    val_loader_kwargs: dict[str, Any] = {
+        "dataset": val_ds,
+        "batch_size": cfg["training"]["batch_size"],
+        "shuffle": False,
+        "num_workers": num_workers,
+        "pin_memory": True,
+        "worker_init_fn": seed_worker,
+        "generator": data_loader_generator,
+    }
+    if num_workers > 0:
+        val_loader_kwargs["persistent_workers"] = persistent_workers
+        val_loader_kwargs["prefetch_factor"] = prefetch_factor
+
+    train_loader = DataLoader(**train_loader_kwargs)
+    val_loader = DataLoader(**val_loader_kwargs)
 
     model = build_model(cfg).to(device)
     loss_fn = DiceBCELoss(bce_weight=0.5, dice_weight=0.5)

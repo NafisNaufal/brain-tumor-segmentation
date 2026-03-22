@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 import torch
@@ -28,9 +28,9 @@ def batch_metrics(
     logits: torch.Tensor,
     targets: torch.Tensor,
     compute_hd95: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     dice_pc = dice_per_class_from_logits(logits, targets)
-    metrics: Dict[str, Any] = {
+    metrics: dict[str, Any] = {
         "dice_et": float(dice_pc[0].item()),
         "dice_tc": float(dice_pc[1].item()),
         "dice_wt": float(dice_pc[2].item()),

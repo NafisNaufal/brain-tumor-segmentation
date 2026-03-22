@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Dict
-
 import torch
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
@@ -16,7 +14,7 @@ def train_one_epoch(
     device: torch.device,
     amp_enabled: bool = True,
     grad_clip: float | None = None,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     model.train()
     running_loss = 0.0
 

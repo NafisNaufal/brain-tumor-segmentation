@@ -40,8 +40,6 @@ class SpatialAxisAttention3D(nn.Module):
         return torch.cat([avg, mx], dim=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        b, c, h, w, d = x.shape
-
         hw = x.mean(dim=4)
         att_hw = self.act(self.conv_hw(self._reduce_channel(hw))).unsqueeze(-1)
 
